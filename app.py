@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -21,7 +22,7 @@ application = ApplicationBuilder().token(TOKEN).build()
 # Conversation states
 AGE, GENDER, LOOKING_FOR, CITY, NAME, BIO, PHOTOS = range(7)
 
-# ====================== HANDLERS ======================
+# ====================== COMMAND HANDLERS ======================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
@@ -123,6 +124,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     return ConversationHandler.END
 
+# ====================== SWIPE & MATCH ======================
+
 async def swipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     profile = db.get_profile(user_id)
@@ -198,7 +201,8 @@ async def matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"• {m['name']}, {m['age']} ({m['city']})\n"
     await update.message.reply_text(text)
 
-# Register handlers
+# ====================== REGISTER HANDLERS ======================
+
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler('start', start)],
     states={
@@ -235,14 +239,19 @@ def webhook():
 def health():
     return 'MatchBot is LIVE! Webhook: /webhook', 200
 
-# ====================== STARTUP INIT ======================
+# ====================== ASYNC STARTUP INIT ======================
 
-def init_bot():
+def run_async_init():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_bot_async())
+
+async def init_bot_async():
     logging.info("Initializing bot and database...")
-    db.init_db()
-    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/webhook"
     try:
-        result = application.bot.set_webhook(url=webhook_url)
+        db.init_db()
+        webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/webhook"
+        result = await application.bot.set_webhook(url=webhook_url)
         if result:
             logging.info(f"Webhook successfully set to {webhook_url}")
         else:
@@ -251,7 +260,7 @@ def init_bot():
         logging.error(f"Failed to set webhook: {e}")
 
 # Run on import (critical for gunicorn)
-init_bot()
+run_async_init()
 
 # Export app for gunicorn
 app = app
