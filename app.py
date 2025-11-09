@@ -8,21 +8,20 @@ from telegram.ext import (
 )
 import database as db
 
-# Flask app
+# ====================== FLASK APP ======================
 app = Flask(__name__)
 
-# Bot token from Render environment
+# ====================== BOT SETUP ======================
 TOKEN = os.getenv('BOT_TOKEN')
 if not TOKEN:
-    raise RuntimeError("BOT_TOKEN not set in Render environment variables")
+    raise RuntimeError("BOT_TOKEN not set in Render environment")
 
-# Build application using new v21+ syntax
 application = ApplicationBuilder().token(TOKEN).build()
 
 # Conversation states
 AGE, GENDER, LOOKING_FOR, CITY, NAME, BIO, PHOTOS = range(7)
 
-# ====================== COMMAND HANDLERS ======================
+# ====================== HANDLERS ======================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
@@ -124,8 +123,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     return ConversationHandler.END
 
-# ====================== SWIPE & MATCH ======================
-
 async def swipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     profile = db.get_profile(user_id)
@@ -201,8 +198,7 @@ async def matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"• {m['name']}, {m['age']} ({m['city']})\n"
     await update.message.reply_text(text)
 
-# ====================== REGISTER HANDLERS ======================
-
+# Register handlers
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler('start', start)],
     states={
@@ -223,3 +219,45 @@ conv_handler = ConversationHandler(
 application.add_handler(conv_handler)
 application.add_handler(CommandHandler('swipe', swipe))
 application.add_handler(CommandHandler('matches', matches))
+application.add_handler(CallbackQueryHandler(button))
+
+# ====================== WEBHOOK ROUTES ======================
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.method == 'POST':
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        application.process_update(update)
+        return 'OK', 200
+    return 'Method Not Allowed', 405
+
+@app.route('/')
+def health():
+    return 'MatchBot is LIVE! Webhook: /webhook', 200
+
+# ====================== STARTUP INIT ======================
+
+def init_bot():
+    logging.info("Initializing bot and database...")
+    db.init_db()
+    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/webhook"
+    try:
+        result = application.bot.set_webhook(url=webhook_url)
+        if result:
+            logging.info(f"Webhook successfully set to {webhook_url}")
+        else:
+            logging.error("set_webhook returned False")
+    except Exception as e:
+        logging.error(f"Failed to set webhook: {e}")
+
+# Run on import (critical for gunicorn)
+init_bot()
+
+# Export app for gunicorn
+app = app
+
+# Local testing only
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
