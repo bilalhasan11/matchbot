@@ -1,0 +1,4 @@
+python-telegram-bot==20.7
+psycopg2-binary==2.9.9
+flask==3.0.3  # For webhook server
+gunicorn==22.0.0  # Production WSGI server
