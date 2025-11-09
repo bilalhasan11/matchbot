@@ -3,46 +3,51 @@ import logging
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
 import database as db
 
-# Flask app for Render webhook
+# Flask app
 app = Flask(__name__)
 
+# Bot token from Render environment
 TOKEN = os.getenv('BOT_TOKEN')
 if not TOKEN:
-    raise RuntimeError("BOT_TOKEN not set")
+    raise RuntimeError("BOT_TOKEN not set in Render environment variables")
 
-# Telegram app (webhook mode)
-application = Application.builder().token(TOKEN).build()
+# Build application using new v21+ syntax
+application = ApplicationBuilder().token(TOKEN).build()
 
-# States (same as before)
+# Conversation states
 AGE, GENDER, LOOKING_FOR, CITY, NAME, BIO, PHOTOS = range(7)
 
-# Handlers (copy from previous bot.py - start, age, gender, etc.)
+# ====================== COMMAND HANDLERS ======================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "Hi! I'm a simple match bot.\n\n"
-        "Be safe online. No personal data is shared.\n\n"
+        "Be safe online.\n\n"
         "What's your age? (18–99)"
     )
     return AGE
 
 async def age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        age = int(update.message.text)
-        if 18 <= age <= 99:
-            context.user_data['age'] = age
+        age_val = int(update.message.text)
+        if 18 <= age_val <= 99:
+            context.user_data['age'] = age_val
             keyboard = [['I\'m male', 'I\'m female', 'Other']]
-            await update.message.reply_text("Your gender:", reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True))
+            await update.message.reply_text(
+                "Your gender:",
+                reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+            )
             return GENDER
         else:
             await update.message.reply_text("Age must be 18–99.")
             return AGE
-    except:
-        await update.message.reply_text("Enter a number.")
+    except ValueError:
+        await update.message.reply_text("Please enter a valid number.")
         return AGE
 
 async def gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -50,7 +55,10 @@ async def gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     gender = text.split("'")[1] if "'" in text else text
     context.user_data['gender'] = gender
     keyboard = [['Women', 'Men', 'Everyone']]
-    await update.message.reply_text("Who are you looking for?", reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True))
+    await update.message.reply_text(
+        "Who are you looking for?",
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    )
     return LOOKING_FOR
 
 async def looking_for(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -75,6 +83,7 @@ async def bio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
+
     if update.message.photo:
         photo_file = update.message.photo[-1]
         path = db.download_photo(context.bot, photo_file, user_id)
@@ -85,17 +94,19 @@ async def photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if count < 3:
             await update.message.reply_text(f"Photo {count}/3 added. Send more or /done")
             return PHOTOS
-    # Save
+
+    # Save profile
     db.save_profile(
-        user_id,
-        context.user_data['name'],
-        context.user_data['age'],
-        context.user_data['gender'],
-        context.user_data['looking_for'],
-        context.user_data['city'],
-        context.user_data['bio'],
-        context.user_data.get('photos', [])
+        user_id=user_id,
+        name=context.user_data['name'],
+        age=context.user_data['age'],
+        gender=context.user_data['gender'],
+        looking_for=context.user_data['looking_for'],
+        city=context.user_data['city'],
+        bio=context.user_data['bio'],
+        photos_paths=context.user_data.get('photos', [])
     )
+
     await update.message.reply_text(
         f"Profile saved!\n\n"
         f"{context.user_data['name']}, {context.user_data['age']}, {context.user_data['city']}\n"
@@ -113,17 +124,20 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     return ConversationHandler.END
 
-# Swipe handlers
+# ====================== SWIPE & MATCH ======================
+
 async def swipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     profile = db.get_profile(user_id)
     if not profile:
         await update.message.reply_text("Use /start first.")
         return
+
     candidates = db.get_candidates(user_id)
     if not candidates:
         await update.message.reply_text("No one nearby. Try later!")
         return
+
     context.user_data['candidates'] = candidates
     context.user_data['index'] = 0
     await show_profile(update, context)
@@ -133,17 +147,25 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if idx >= len(context.user_data['candidates']):
         await update.message.reply_text("No more profiles. Use /swipe again.")
         return
+
     cand_id = context.user_data['candidates'][idx]
     cand = db.get_profile(cand_id)
     caption = f"{cand['name']}, {cand['age']}\n{cand['city']}\n{cand['bio'][:200]}"
+
     keyboard = [
         [InlineKeyboardButton("Like", callback_data=f"like_{cand_id}"),
          InlineKeyboardButton("Skip", callback_data=f"skip_{cand_id}")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
+
     if cand['photos']:
         with open(cand['photos'][0], 'rb') as f:
-            await context.bot.send_photo(update.effective_chat.id, f, caption=caption, reply_markup=markup)
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=f,
+                caption=caption,
+                reply_markup=markup
+            )
     else:
         await update.message.reply_text(caption, reply_markup=markup)
 
@@ -152,17 +174,18 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     user_id = update.effective_user.id
+
     if data.startswith('like_'):
         to_id = int(data.split('_')[1])
         mutual = db.add_like(user_id, to_id)
         if mutual:
             await query.edit_message_text("MATCH! Start chatting.")
-            other = db.get_profile(to_id)
-            await context.bot.send_message(to_id, f"MATCH with {db.get_profile(user_id)['name']}! Reply to chat.")
+            await context.bot.send_message(to_id, f"MATCH with {db.get_profile(user_id)['name']}!")
         else:
             await query.edit_message_text("Like sent.")
         context.user_data['index'] += 1
         await show_profile(update, context)
+
     elif data.startswith('skip_'):
         context.user_data['index'] += 1
         await show_profile(update, context)
@@ -178,8 +201,9 @@ async def matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"• {m['name']}, {m['age']} ({m['city']})\n"
     await update.message.reply_text(text)
 
-# Add handlers to application
-conv = ConversationHandler(
+# ====================== REGISTER HANDLERS ======================
+
+conv_handler = ConversationHandler(
     entry_points=[CommandHandler('start', start)],
     states={
         AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, age)],
@@ -188,39 +212,14 @@ conv = ConversationHandler(
         CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, city)],
         NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)],
         BIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, bio)],
-        PHOTOS: [MessageHandler(filters.PHOTO, photos), CommandHandler('done', done_photos)],
+        PHOTOS: [
+            MessageHandler(filters.PHOTO, photos),
+            CommandHandler('done', done_photos)
+        ],
     },
     fallbacks=[CommandHandler('cancel', cancel)]
 )
 
-application.add_handler(conv)
+application.add_handler(conv_handler)
 application.add_handler(CommandHandler('swipe', swipe))
 application.add_handler(CommandHandler('matches', matches))
-application.add_handler(CallbackQueryHandler(button))
-
-# Webhook endpoint for Render
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.process_update(update)
-    return 'OK'
-
-# Health check (Render pings / for liveness)
-@app.route('/')
-def health():
-    return 'Bot is running!'
-
-# Init DB and set webhook on startup
-def init_bot():
-    db.init_db()
-    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'your-service.onrender.com')}/webhook"
-    application.bot.set_webhook(url=webhook_url)
-    logging.info(f"Webhook set to {webhook_url}")
-
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    init_bot()
-    # For local testing: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-    # For Render: Use gunicorn via start command
-
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
