@@ -222,4 +222,5 @@ if __name__ == '__main__':
     init_bot()
     # For local testing: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
     # For Render: Use gunicorn via start command
+
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
