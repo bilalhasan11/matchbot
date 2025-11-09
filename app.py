@@ -231,7 +231,8 @@ application.add_handler(CallbackQueryHandler(button))
 def webhook():
     if request.method == 'POST':
         update = Update.de_json(request.get_json(force=True), application.bot)
-        application.process_update(update)
+        # Run async process_update in a new event loop
+        asyncio.run(application.process_update(update))
         return 'OK', 200
     return 'Method Not Allowed', 405
 
@@ -259,13 +260,13 @@ async def init_bot_async():
     except Exception as e:
         logging.error(f"Failed to set webhook: {e}")
 
-# Run on import (critical for gunicorn)
+# Run on import
 run_async_init()
 
-# Export app for gunicorn
+# Export app
 app = app
 
-# Local testing only
+# Local testing
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     port = int(os.environ.get('PORT', 5000))
